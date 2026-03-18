@@ -1,23 +1,43 @@
-/**
- * @fileoverview Types for this package.
- */
-import type { ConfigObject } from "@eslint/core";
-/**
- * Infinite array type.
- */
-export type InfiniteArray<T> = T | InfiniteArray<T>[];
-/**
- * The type of array element in the `extends` property after flattening.
- */
-export type SimpleExtendsElement = string | ConfigObject;
-/**
- * The type of array element in the `extends` property before flattening.
- */
-export type ExtendsElement = SimpleExtendsElement | InfiniteArray<ConfigObject>;
-/**
- * Config with extends. Valid only inside of `defineConfig()`.
- */
-export interface ConfigWithExtends extends ConfigObject {
-    extends?: ExtendsElement[];
+import type { SourceMapSegment } from './sourcemap-segment';
+export interface SourceMapV3 {
+    file?: string | null;
+    names: readonly string[];
+    sourceRoot?: string;
+    sources: readonly (string | null)[];
+    sourcesContent?: readonly (string | null)[];
+    version: 3;
+    ignoreList?: readonly number[];
 }
-export type ConfigWithExtendsArray = InfiniteArray<ConfigWithExtends>[];
+export interface EncodedSourceMap extends SourceMapV3 {
+    mappings: string;
+}
+export interface DecodedSourceMap extends SourceMapV3 {
+    mappings: readonly SourceMapSegment[][];
+}
+export interface Pos {
+    line: number;
+    column: number;
+}
+export interface OriginalPos extends Pos {
+    source: string;
+}
+export interface BindingExpressionRange {
+    start: Pos;
+    expression: string;
+}
+export type Mapping = {
+    generated: Pos;
+    source: undefined;
+    original: undefined;
+    name: undefined;
+} | {
+    generated: Pos;
+    source: string;
+    original: Pos;
+    name: string;
+} | {
+    generated: Pos;
+    source: string;
+    original: Pos;
+    name: undefined;
+};
