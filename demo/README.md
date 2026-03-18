@@ -1,5 +1,3 @@
-# Oxc's modular runtime helpers
+# Oxc Types
 
-Code copied from the published package `@babel/runtime`.
-
-All credits to the Babel team.
+Typescript definitions for Oxc AST nodes.
