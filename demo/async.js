@@ -1,90 +1,90 @@
-"use strict";
+'use strict';
 
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.forwardAsync = forwardAsync;
-exports.isAsync = void 0;
-exports.isThenable = isThenable;
-exports.maybeAsync = maybeAsync;
-exports.waitFor = exports.onFirstPause = void 0;
-function _gensync() {
-  const data = require("gensync");
-  _gensync = function () {
-    return data;
-  };
-  return data;
-}
-function asyncGeneratorStep(n, t, e, r, o, a, c) { try { var i = n[a](c), u = i.value; } catch (n) { return void e(n); } i.done ? t(u) : Promise.resolve(u).then(r, o); }
-function _asyncToGenerator(n) { return function () { var t = this, e = arguments; return new Promise(function (r, o) { var a = n.apply(t, e); function _next(n) { asyncGeneratorStep(a, r, o, _next, _throw, "next", n); } function _throw(n) { asyncGeneratorStep(a, r, o, _next, _throw, "throw", n); } _next(void 0); }); }; }
-const runGenerator = _gensync()(function* (item) {
-  return yield* item;
-});
-const isAsync = exports.isAsync = _gensync()({
-  sync: () => false,
-  errback: cb => cb(null, true)
-});
-function maybeAsync(fn, message) {
-  return _gensync()({
-    sync(...args) {
-      const result = fn.apply(this, args);
-      if (isThenable(result)) throw new Error(message);
-      return result;
-    },
-    async(...args) {
-      return Promise.resolve(fn.apply(this, args));
+var MissingRefError = require('./error_classes').MissingRef;
+
+module.exports = compileAsync;
+
+
+/**
+ * Creates validating function for passed schema with asynchronous loading of missing schemas.
+ * `loadSchema` option should be a function that accepts schema uri and returns promise that resolves with the schema.
+ * @this  Ajv
+ * @param {Object}   schema schema object
+ * @param {Boolean}  meta optional true to compile meta-schema; this parameter can be skipped
+ * @param {Function} callback an optional node-style callback, it is called with 2 parameters: error (or null) and validating function.
+ * @return {Promise} promise that resolves with a validating function.
+ */
+function compileAsync(schema, meta, callback) {
+  /* eslint no-shadow: 0 */
+  /* global Promise */
+  /* jshint validthis: true */
+  var self = this;
+  if (typeof this._opts.loadSchema != 'function')
+    throw new Error('options.loadSchema should be a function');
+
+  if (typeof meta == 'function') {
+    callback = meta;
+    meta = undefined;
+  }
+
+  var p = loadMetaSchemaOf(schema).then(function () {
+    var schemaObj = self._addSchema(schema, undefined, meta);
+    return schemaObj.validate || _compileAsync(schemaObj);
+  });
+
+  if (callback) {
+    p.then(
+      function(v) { callback(null, v); },
+      callback
+    );
+  }
+
+  return p;
+
+
+  function loadMetaSchemaOf(sch) {
+    var $schema = sch.$schema;
+    return $schema && !self.getSchema($schema)
+            ? compileAsync.call(self, { $ref: $schema }, true)
+            : Promise.resolve();
+  }
+
+
+  function _compileAsync(schemaObj) {
+    try { return self._compile(schemaObj); }
+    catch(e) {
+      if (e instanceof MissingRefError) return loadMissingSchema(e);
+      throw e;
     }
-  });
-}
-const withKind = _gensync()({
-  sync: cb => cb("sync"),
-  async: function () {
-    var _ref = _asyncToGenerator(function* (cb) {
-      return cb("async");
-    });
-    return function async(_x) {
-      return _ref.apply(this, arguments);
-    };
-  }()
-});
-function forwardAsync(action, cb) {
-  const g = _gensync()(action);
-  return withKind(kind => {
-    const adapted = g[kind];
-    return cb(adapted);
-  });
-}
-const onFirstPause = exports.onFirstPause = _gensync()({
-  name: "onFirstPause",
-  arity: 2,
-  sync: function (item) {
-    return runGenerator.sync(item);
-  },
-  errback: function (item, firstPause, cb) {
-    let completed = false;
-    runGenerator.errback(item, (err, value) => {
-      completed = true;
-      cb(err, value);
-    });
-    if (!completed) {
-      firstPause();
+
+
+    function loadMissingSchema(e) {
+      var ref = e.missingSchema;
+      if (added(ref)) throw new Error('Schema ' + ref + ' is loaded but ' + e.missingRef + ' cannot be resolved');
+
+      var schemaPromise = self._loadingSchemas[ref];
+      if (!schemaPromise) {
+        schemaPromise = self._loadingSchemas[ref] = self._opts.loadSchema(ref);
+        schemaPromise.then(removePromise, removePromise);
+      }
+
+      return schemaPromise.then(function (sch) {
+        if (!added(ref)) {
+          return loadMetaSchemaOf(sch).then(function () {
+            if (!added(ref)) self.addSchema(sch, ref, undefined, meta);
+          });
+        }
+      }).then(function() {
+        return _compileAsync(schemaObj);
+      });
+
+      function removePromise() {
+        delete self._loadingSchemas[ref];
+      }
+
+      function added(ref) {
+        return self._refs[ref] || self._schemas[ref];
+      }
     }
   }
-});
-const waitFor = exports.waitFor = _gensync()({
-  sync: x => x,
-  async: function () {
-    var _ref2 = _asyncToGenerator(function* (x) {
-      return x;
-    });
-    return function async(_x2) {
-      return _ref2.apply(this, arguments);
-    };
-  }()
-});
-function isThenable(val) {
-  return !!val && (typeof val === "object" || typeof val === "function") && !!val.then && typeof val.then === "function";
 }
-0 && 0;
-
-//# sourceMappingURL=async.js.map
