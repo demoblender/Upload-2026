@@ -1,29 +1,29 @@
 /**
- * @fileoverview Types for the config-array package.
- * @author Nicholas C. Zakas
+ * @fileoverview Types for this package.
  */
 
-export interface ConfigObject {
-	/**
-	 * The base path for files and ignores.
-	 */
-	basePath?: string;
+import type { ConfigObject } from "@eslint/core";
 
-	/**
-	 * The files to include.
-	 */
-	files?: string[];
+/**
+ * Infinite array type.
+ */
+export type InfiniteArray<T> = T | InfiniteArray<T>[];
 
-	/**
-	 * The files to exclude.
-	 */
-	ignores?: string[];
+/**
+ * The type of array element in the `extends` property after flattening.
+ */
+export type SimpleExtendsElement = string | ConfigObject;
 
-	/**
-	 * The name of the config object.
-	 */
-	name?: string;
+/**
+ * The type of array element in the `extends` property before flattening.
+ */
+export type ExtendsElement = SimpleExtendsElement | InfiniteArray<ConfigObject>;
 
-	// may also have any number of other properties
-	[key: string]: unknown;
+/**
+ * Config with extends. Valid only inside of `defineConfig()`.
+ */
+export interface ConfigWithExtends extends ConfigObject {
+	extends?: ExtendsElement[];
 }
+
+export type ConfigWithExtendsArray = InfiniteArray<ConfigWithExtends>[];
