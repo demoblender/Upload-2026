@@ -1,44 +1,27 @@
-"use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.default = _interopRequireWildcard;
-function _interopRequireWildcard(obj, nodeInterop) {
-  if (typeof WeakMap === "function") {
-    var cacheBabelInterop = new WeakMap();
-    var cacheNodeInterop = new WeakMap();
-  }
-  return (exports.default = _interopRequireWildcard = function (obj, nodeInterop) {
-    if (!nodeInterop && obj && obj.__esModule) {
-      return obj;
-    }
-    var _;
-    var newObj = {
-      __proto__: null,
-      default: obj
-    };
-    var desc;
-    if (obj === null || typeof obj !== "object" && typeof obj !== "function") {
-      return newObj;
-    }
-    _ = nodeInterop ? cacheNodeInterop : cacheBabelInterop;
-    if (_) {
-      if (_.has(obj)) return _.get(obj);
-      _.set(obj, newObj);
-    }
-    for (const key in obj) {
-      if (key !== "default" && {}.hasOwnProperty.call(obj, key)) {
-        desc = (_ = Object.defineProperty) && Object.getOwnPropertyDescriptor(obj, key);
-        if (desc && (desc.get || desc.set)) {
-          _(newObj, key, desc);
-        } else {
-          newObj[key] = obj[key];
-        }
-      }
-    }
-    return newObj;
-  })(obj, nodeInterop);
+import _typeof from "./typeof.js";
+function _getRequireWildcardCache(e) {
+  if ("function" != typeof WeakMap) return null;
+  var r = new WeakMap(),
+    t = new WeakMap();
+  return (_getRequireWildcardCache = function _getRequireWildcardCache(e) {
+    return e ? t : r;
+  })(e);
 }
-
-//# sourceMappingURL=interopRequireWildcard.js.map
+function _interopRequireWildcard(e, r) {
+  if (!r && e && e.__esModule) return e;
+  if (null === e || "object" != _typeof(e) && "function" != typeof e) return {
+    "default": e
+  };
+  var t = _getRequireWildcardCache(r);
+  if (t && t.has(e)) return t.get(e);
+  var n = {
+      __proto__: null
+    },
+    a = Object.defineProperty && Object.getOwnPropertyDescriptor;
+  for (var u in e) if ("default" !== u && {}.hasOwnProperty.call(e, u)) {
+    var i = a ? Object.getOwnPropertyDescriptor(e, u) : null;
+    i && (i.get || i.set) ? Object.defineProperty(n, u, i) : n[u] = e[u];
+  }
+  return n["default"] = e, t && t.set(e, n), n;
+}
+export { _interopRequireWildcard as default };
