@@ -1,242 +1,218 @@
-# ObjectSchema Package
+# @jridgewell/remapping
 
-## Overview
+> Remap sequential sourcemaps through transformations to point at the original source code
 
-A JavaScript object merge/validation utility where you can define a different merge and validation strategy for each key. This is helpful when you need to validate complex data structures and then merge them in a way that is more complex than `Object.assign()`. This is used in the [`@eslint/config-array`](https://npmjs.com/package/@eslint/config-array) package but can also be used on its own.
+Remapping allows you to take the sourcemaps generated through transforming your code and "remap"
+them to the original source locations. Think "my minified code, transformed with babel and bundled
+with webpack", all pointing to the correct location in your original source code.
+
+With remapping, none of your source code transformations need to be aware of the input's sourcemap,
+they only need to generate an output sourcemap. This greatly simplifies building custom
+transformations (think a find-and-replace).
 
 ## Installation
 
-For Node.js and compatible runtimes:
-
-```shell
-npm install @eslint/object-schema
-# or
-yarn add @eslint/object-schema
-# or
-pnpm install @eslint/object-schema
-# or
-bun add @eslint/object-schema
-```
-
-For Deno:
-
-```shell
-deno add @eslint/object-schema
+```sh
+npm install @jridgewell/remapping
 ```
 
 ## Usage
 
-Import the `ObjectSchema` constructor:
+```typescript
+function remapping(
+  map: SourceMap | SourceMap[],
+  loader: (file: string, ctx: LoaderContext) => (SourceMap | null | undefined),
+  options?: { excludeContent: boolean, decodedMappings: boolean }
+): SourceMap;
 
-```js
-// using ESM
-import { ObjectSchema } from "@eslint/object-schema";
-
-// using CommonJS
-const { ObjectSchema } = require("@eslint/object-schema");
-
-const schema = new ObjectSchema({
-	// define a definition for the "downloads" key
-	downloads: {
-		required: true,
-		merge(value1, value2) {
-			return value1 + value2;
-		},
-		validate(value) {
-			if (typeof value !== "number") {
-				throw new Error("Expected downloads to be a number.");
-			}
-		},
-	},
-
-	// define a strategy for the "versions" key
-	version: {
-		required: true,
-		merge(value1, value2) {
-			return value1.concat(value2);
-		},
-		validate(value) {
-			if (!Array.isArray(value)) {
-				throw new Error("Expected versions to be an array.");
-			}
-		},
-	},
-});
-
-const record1 = {
-	downloads: 25,
-	versions: ["v1.0.0", "v1.1.0", "v1.2.0"],
-};
-
-const record2 = {
-	downloads: 125,
-	versions: ["v2.0.0", "v2.1.0", "v3.0.0"],
-};
-
-// make sure the records are valid
-schema.validate(record1);
-schema.validate(record2);
-
-// merge together (schema.merge() accepts any number of objects)
-const result = schema.merge(record1, record2);
-
-// result looks like this:
-
-const result = {
-	downloads: 75,
-	versions: ["v1.0.0", "v1.1.0", "v1.2.0", "v2.0.0", "v2.1.0", "v3.0.0"],
-};
+// LoaderContext gives the loader the importing sourcemap, tree depth, the ability to override the
+// "source" location (where child sources are resolved relative to, or the location of original
+// source), and the ability to override the "content" of an original source for inclusion in the
+// output sourcemap.
+type LoaderContext = {
+ readonly importer: string;
+ readonly depth: number;
+ source: string;
+ content: string | null | undefined;
+}
 ```
 
-## Tips and Tricks
-
-### Named merge strategies
-
-Instead of specifying a `merge()` method, you can specify one of the following strings to use a default merge strategy:
-
-- `"assign"` - use `Object.assign()` to merge the two values into one object.
-- `"overwrite"` - the second value always replaces the first.
-- `"replace"` - the second value replaces the first if the second is not `undefined`.
-
-For example:
+`remapping` takes the final output sourcemap, and a `loader` function. For every source file pointer
+in the sourcemap, the `loader` will be called with the resolved path. If the path itself represents
+a transformed file (it has a sourcmap associated with it), then the `loader` should return that
+sourcemap. If not, the path will be treated as an original, untransformed source code.
 
 ```js
-const schema = new ObjectSchema({
-	name: {
-		merge: "replace",
-		validate() {},
-	},
+// Babel transformed "helloworld.js" into "transformed.js"
+const transformedMap = JSON.stringify({
+  file: 'transformed.js',
+  // 1st column of 2nd line of output file translates into the 1st source
+  // file, line 3, column 2
+  mappings: ';CAEE',
+  sources: ['helloworld.js'],
+  version: 3,
 });
+
+// Uglify minified "transformed.js" into "transformed.min.js"
+const minifiedTransformedMap = JSON.stringify({
+  file: 'transformed.min.js',
+  // 0th column of 1st line of output file translates into the 1st source
+  // file, line 2, column 1.
+  mappings: 'AACC',
+  names: [],
+  sources: ['transformed.js'],
+  version: 3,
+});
+
+const remapped = remapping(
+  minifiedTransformedMap,
+  (file, ctx) => {
+
+    // The "transformed.js" file is an transformed file.
+    if (file === 'transformed.js') {
+      // The root importer is empty.
+      console.assert(ctx.importer === '');
+      // The depth in the sourcemap tree we're currently loading.
+      // The root `minifiedTransformedMap` is depth 0, and its source children are depth 1, etc.
+      console.assert(ctx.depth === 1);
+
+      return transformedMap;
+    }
+
+    // Loader will be called to load transformedMap's source file pointers as well.
+    console.assert(file === 'helloworld.js');
+    // `transformed.js`'s sourcemap points into `helloworld.js`.
+    console.assert(ctx.importer === 'transformed.js');
+    // This is a source child of `transformed`, which is a source child of `minifiedTransformedMap`.
+    console.assert(ctx.depth === 2);
+    return null;
+  }
+);
+
+console.log(remapped);
+// {
+//   file: 'transpiled.min.js',
+//   mappings: 'AAEE',
+//   sources: ['helloworld.js'],
+//   version: 3,
+// };
 ```
 
-### Named validation strategies
+In this example, `loader` will be called twice:
 
-Instead of specifying a `validate()` method, you can specify one of the following strings to use a default validation strategy:
+1. `"transformed.js"`, the first source file pointer in the `minifiedTransformedMap`. We return the
+   associated sourcemap for it (its a transformed file, after all) so that sourcemap locations can
+   be traced through it into the source files it represents.
+2. `"helloworld.js"`, our original, unmodified source code. This file does not have a sourcemap, so
+   we return `null`.
 
-- `"array"` - value must be an array.
-- `"boolean"` - value must be a boolean.
-- `"number"` - value must be a number.
-- `"object"` - value must be an object.
-- `"object?"` - value must be an object or null.
-- `"string"` - value must be a string.
-- `"string!"` - value must be a non-empty string.
+The `remapped` sourcemap now points from `transformed.min.js` into locations in `helloworld.js`. If
+you were to read the `mappings`, it says "0th column of the first line output line points to the 1st
+column of the 2nd line of the file `helloworld.js`".
 
-For example:
+### Multiple transformations of a file
+
+As a convenience, if you have multiple single-source transformations of a file, you may pass an
+array of sourcemap files in the order of most-recent transformation sourcemap first. Note that this
+changes the `importer` and `depth` of each call to our loader. So our above example could have been
+written as:
 
 ```js
-const schema = new ObjectSchema({
-	name: {
-		merge: "replace",
-		validate: "string",
-	},
-});
+const remapped = remapping(
+  [minifiedTransformedMap, transformedMap],
+  () => null
+);
+
+console.log(remapped);
+// {
+//   file: 'transpiled.min.js',
+//   mappings: 'AAEE',
+//   sources: ['helloworld.js'],
+//   version: 3,
+// };
 ```
 
-### Subschemas
+### Advanced control of the loading graph
 
-If you are defining a key that is, itself, an object, you can simplify the process by using a subschema. Instead of defining `merge()` and `validate()`, assign a `schema` key that contains a schema definition, like this:
+#### `source`
+
+The `source` property can overridden to any value to change the location of the current load. Eg,
+for an original source file, it allows us to change the location to the original source regardless
+of what the sourcemap source entry says. And for transformed files, it allows us to change the
+relative resolving location for child sources of the loaded sourcemap.
 
 ```js
-const schema = new ObjectSchema({
-	name: {
-		schema: {
-			first: {
-				merge: "replace",
-				validate: "string",
-			},
-			last: {
-				merge: "replace",
-				validate: "string",
-			},
-		},
-	},
-});
+const remapped = remapping(
+  minifiedTransformedMap,
+  (file, ctx) => {
 
-schema.validate({
-	name: {
-		first: "n",
-		last: "z",
-	},
-});
+    if (file === 'transformed.js') {
+      // We pretend the transformed.js file actually exists in the 'src/' directory. When the nested
+      // source files are loaded, they will now be relative to `src/`.
+      ctx.source = 'src/transformed.js';
+      return transformedMap;
+    }
+
+    console.assert(file === 'src/helloworld.js');
+    // We could futher change the source of this original file, eg, to be inside a nested directory
+    // itself. This will be reflected in the remapped sourcemap.
+    ctx.source = 'src/nested/transformed.js';
+    return null;
+  }
+);
+
+console.log(remapped);
+// {
+//   …,
+//   sources: ['src/nested/helloworld.js'],
+// };
 ```
 
-### Remove Keys During Merge
 
-If the merge strategy for a key returns `undefined`, then the key will not appear in the final object. For example:
+#### `content`
+
+The `content` property can be overridden when we encounter an original source file. Eg, this allows
+you to manually provide the source content of the original file regardless of whether the
+`sourcesContent` field is present in the parent sourcemap. It can also be set to `null` to remove
+the source content.
 
 ```js
-const schema = new ObjectSchema({
-	date: {
-		merge() {
-			return undefined;
-		},
-		validate(value) {
-			Date.parse(value); // throws an error when invalid
-		},
-	},
-});
+const remapped = remapping(
+  minifiedTransformedMap,
+  (file, ctx) => {
 
-const object1 = { date: "5/5/2005" };
-const object2 = { date: "6/6/2006" };
+    if (file === 'transformed.js') {
+      // transformedMap does not include a `sourcesContent` field, so usually the remapped sourcemap
+      // would not include any `sourcesContent` values.
+      return transformedMap;
+    }
 
-const result = schema.merge(object1, object2);
+    console.assert(file === 'helloworld.js');
+    // We can read the file to provide the source content.
+    ctx.content = fs.readFileSync(file, 'utf8');
+    return null;
+  }
+);
 
-console.log("date" in result); // false
+console.log(remapped);
+// {
+//   …,
+//   sourcesContent: [
+//     'console.log("Hello world!")',
+//   ],
+// };
 ```
 
-### Requiring Another Key Be Present
+### Options
 
-If you'd like the presence of one key to require the presence of another key, you can use the `requires` property to specify an array of other properties that any key requires. For example:
+#### excludeContent
 
-```js
-const schema = new ObjectSchema();
+By default, `excludeContent` is `false`. Passing `{ excludeContent: true }` will exclude the
+`sourcesContent` field from the returned sourcemap. This is mainly useful when you want to reduce
+the size out the sourcemap.
 
-const schema = new ObjectSchema({
-	date: {
-		merge() {
-			return undefined;
-		},
-		validate(value) {
-			Date.parse(value); // throws an error when invalid
-		},
-	},
-	time: {
-		requires: ["date"],
-		merge(first, second) {
-			return second;
-		},
-		validate(value) {
-			// ...
-		},
-	},
-});
+#### decodedMappings
 
-// throws error: Key "time" requires keys "date"
-schema.validate({
-	time: "13:45",
-});
-```
-
-In this example, even though `date` is an optional key, it is required to be present whenever `time` is present.
-
-## License
-
-Apache 2.0
-
-<!-- NOTE: This section is autogenerated. Do not manually edit.-->
-<!--sponsorsstart-->
-
-## Sponsors
-
-The following companies, organizations, and individuals support ESLint's ongoing maintenance and development. [Become a Sponsor](https://eslint.org/donate)
-to get your logo on our READMEs and [website](https://eslint.org/sponsors).
-
-<h3>Platinum Sponsors</h3>
-<p><a href="https://automattic.com"><img src="https://images.opencollective.com/automattic/d0ef3e1/logo.png" alt="Automattic" height="128"></a> <a href="https://www.airbnb.com/"><img src="https://images.opencollective.com/airbnb/d327d66/logo.png" alt="Airbnb" height="128"></a></p><h3>Gold Sponsors</h3>
-<p><a href="https://qlty.sh/"><img src="https://images.opencollective.com/qltysh/33d157d/logo.png" alt="Qlty Software" height="96"></a> <a href="https://trunk.io/"><img src="https://images.opencollective.com/trunkio/fb92d60/avatar.png" alt="trunk.io" height="96"></a> <a href="https://shopify.engineering/"><img src="https://avatars.githubusercontent.com/u/8085" alt="Shopify" height="96"></a></p><h3>Silver Sponsors</h3>
-<p><a href="https://vite.dev/"><img src="https://images.opencollective.com/vite/e6d15e1/logo.png" alt="Vite" height="64"></a> <a href="https://liftoff.io/"><img src="https://images.opencollective.com/liftoff/5c4fa84/logo.png" alt="Liftoff" height="64"></a> <a href="https://americanexpress.io"><img src="https://avatars.githubusercontent.com/u/3853301" alt="American Express" height="64"></a> <a href="https://stackblitz.com"><img src="https://avatars.githubusercontent.com/u/28635252" alt="StackBlitz" height="64"></a></p><h3>Bronze Sponsors</h3>
-<p><a href="https://syntax.fm"><img src="https://github.com/syntaxfm.png" alt="Syntax" height="32"></a> <a href="https://cybozu.co.jp/"><img src="https://images.opencollective.com/cybozu/933e46d/logo.png" alt="Cybozu" height="32"></a> <a href="https://sentry.io"><img src="https://github.com/getsentry.png" alt="Sentry" height="32"></a> <a href="https://discord.com"><img src="https://images.opencollective.com/discordapp/f9645d9/logo.png" alt="Discord" height="32"></a> <a href="https://www.gitbook.com"><img src="https://avatars.githubusercontent.com/u/7111340" alt="GitBook" height="32"></a> <a href="https://nx.dev"><img src="https://avatars.githubusercontent.com/u/23692104" alt="Nx" height="32"></a> <a href="https://opensource.mercedes-benz.com/"><img src="https://avatars.githubusercontent.com/u/34240465" alt="Mercedes-Benz Group" height="32"></a> <a href="https://herocoders.com"><img src="https://avatars.githubusercontent.com/u/37549774" alt="HeroCoders" height="32"></a> <a href="https://www.lambdatest.com"><img src="https://avatars.githubusercontent.com/u/171592363" alt="LambdaTest" height="32"></a></p>
-<h3>Technology Sponsors</h3>
-Technology sponsors allow us to use their products and services for free as part of a contribution to the open source ecosystem and our work.
-<p><a href="https://netlify.com"><img src="https://raw.githubusercontent.com/eslint/eslint.org/main/src/assets/images/techsponsors/netlify-icon.svg" alt="Netlify" height="32"></a> <a href="https://algolia.com"><img src="https://raw.githubusercontent.com/eslint/eslint.org/main/src/assets/images/techsponsors/algolia-icon.svg" alt="Algolia" height="32"></a> <a href="https://1password.com"><img src="https://raw.githubusercontent.com/eslint/eslint.org/main/src/assets/images/techsponsors/1password-icon.svg" alt="1Password" height="32"></a></p>
-<!--sponsorsend-->
+By default, `decodedMappings` is `false`. Passing `{ decodedMappings: true }` will leave the
+`mappings` field in a [decoded state](https://github.com/rich-harris/sourcemap-codec) instead of
+encoding into a VLQ string.
