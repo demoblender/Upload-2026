@@ -1,389 +1,163 @@
 'use strict';
 
-var resolve = require('./resolve')
-  , util = require('./util')
-  , errorClasses = require('./error_classes')
-  , stableStringify = require('fast-json-stable-stringify');
+const wrapAnsi16 = (fn, offset) => (...args) => {
+	const code = fn(...args);
+	return `\u001B[${code + offset}m`;
+};
 
-var validateGenerator = require('../dotjs/validate');
+const wrapAnsi256 = (fn, offset) => (...args) => {
+	const code = fn(...args);
+	return `\u001B[${38 + offset};5;${code}m`;
+};
 
-/**
- * Functions below are used inside compiled validations function
- */
+const wrapAnsi16m = (fn, offset) => (...args) => {
+	const rgb = fn(...args);
+	return `\u001B[${38 + offset};2;${rgb[0]};${rgb[1]};${rgb[2]}m`;
+};
 
-var ucs2length = util.ucs2length;
-var equal = require('fast-deep-equal');
+const ansi2ansi = n => n;
+const rgb2rgb = (r, g, b) => [r, g, b];
 
-// this error is thrown by async schemas to return validation errors via exception
-var ValidationError = errorClasses.Validation;
+const setLazyProperty = (object, property, get) => {
+	Object.defineProperty(object, property, {
+		get: () => {
+			const value = get();
 
-module.exports = compile;
+			Object.defineProperty(object, property, {
+				value,
+				enumerable: true,
+				configurable: true
+			});
 
+			return value;
+		},
+		enumerable: true,
+		configurable: true
+	});
+};
 
-/**
- * Compiles schema to validation function
- * @this   Ajv
- * @param  {Object} schema schema object
- * @param  {Object} root object with information about the root schema for this schema
- * @param  {Object} localRefs the hash of local references inside the schema (created by resolve.id), used for inline resolution
- * @param  {String} baseId base ID for IDs in the schema
- * @return {Function} validation function
- */
-function compile(schema, root, localRefs, baseId) {
-  /* jshint validthis: true, evil: true */
-  /* eslint no-shadow: 0 */
-  var self = this
-    , opts = this._opts
-    , refVal = [ undefined ]
-    , refs = {}
-    , patterns = []
-    , patternsHash = {}
-    , defaults = []
-    , defaultsHash = {}
-    , customRules = [];
+/** @type {typeof import('color-convert')} */
+let colorConvert;
+const makeDynamicStyles = (wrap, targetSpace, identity, isBackground) => {
+	if (colorConvert === undefined) {
+		colorConvert = require('color-convert');
+	}
 
-  function patternCode(i, patterns) {
-    var regExpCode = opts.regExp ? 'regExp' : 'new RegExp';
-    return 'var pattern' + i + ' = ' + regExpCode + '(' + util.toQuotedString(patterns[i]) + ');';
-  }
+	const offset = isBackground ? 10 : 0;
+	const styles = {};
 
-  root = root || { schema: schema, refVal: refVal, refs: refs };
+	for (const [sourceSpace, suite] of Object.entries(colorConvert)) {
+		const name = sourceSpace === 'ansi16' ? 'ansi' : sourceSpace;
+		if (sourceSpace === targetSpace) {
+			styles[name] = wrap(identity, offset);
+		} else if (typeof suite === 'object') {
+			styles[name] = wrap(suite[targetSpace], offset);
+		}
+	}
 
-  var c = checkCompiling.call(this, schema, root, baseId);
-  var compilation = this._compilations[c.index];
-  if (c.compiling) return (compilation.callValidate = callValidate);
+	return styles;
+};
 
-  var formats = this._formats;
-  var RULES = this.RULES;
+function assembleStyles() {
+	const codes = new Map();
+	const styles = {
+		modifier: {
+			reset: [0, 0],
+			// 21 isn't widely supported and 22 does the same thing
+			bold: [1, 22],
+			dim: [2, 22],
+			italic: [3, 23],
+			underline: [4, 24],
+			inverse: [7, 27],
+			hidden: [8, 28],
+			strikethrough: [9, 29]
+		},
+		color: {
+			black: [30, 39],
+			red: [31, 39],
+			green: [32, 39],
+			yellow: [33, 39],
+			blue: [34, 39],
+			magenta: [35, 39],
+			cyan: [36, 39],
+			white: [37, 39],
 
-  try {
-    var v = localCompile(schema, root, localRefs, baseId);
-    compilation.validate = v;
-    var cv = compilation.callValidate;
-    if (cv) {
-      cv.schema = v.schema;
-      cv.errors = null;
-      cv.refs = v.refs;
-      cv.refVal = v.refVal;
-      cv.root = v.root;
-      cv.$async = v.$async;
-      if (opts.sourceCode) cv.source = v.source;
-    }
-    return v;
-  } finally {
-    endCompiling.call(this, schema, root, baseId);
-  }
+			// Bright color
+			blackBright: [90, 39],
+			redBright: [91, 39],
+			greenBright: [92, 39],
+			yellowBright: [93, 39],
+			blueBright: [94, 39],
+			magentaBright: [95, 39],
+			cyanBright: [96, 39],
+			whiteBright: [97, 39]
+		},
+		bgColor: {
+			bgBlack: [40, 49],
+			bgRed: [41, 49],
+			bgGreen: [42, 49],
+			bgYellow: [43, 49],
+			bgBlue: [44, 49],
+			bgMagenta: [45, 49],
+			bgCyan: [46, 49],
+			bgWhite: [47, 49],
 
-  /* @this   {*} - custom context, see passContext option */
-  function callValidate() {
-    /* jshint validthis: true */
-    var validate = compilation.validate;
-    var result = validate.apply(this, arguments);
-    callValidate.errors = validate.errors;
-    return result;
-  }
+			// Bright color
+			bgBlackBright: [100, 49],
+			bgRedBright: [101, 49],
+			bgGreenBright: [102, 49],
+			bgYellowBright: [103, 49],
+			bgBlueBright: [104, 49],
+			bgMagentaBright: [105, 49],
+			bgCyanBright: [106, 49],
+			bgWhiteBright: [107, 49]
+		}
+	};
 
-  function localCompile(_schema, _root, localRefs, baseId) {
-    var isRoot = !_root || (_root && _root.schema == _schema);
-    if (_root.schema != root.schema)
-      return compile.call(self, _schema, _root, localRefs, baseId);
+	// Alias bright black as gray (and grey)
+	styles.color.gray = styles.color.blackBright;
+	styles.bgColor.bgGray = styles.bgColor.bgBlackBright;
+	styles.color.grey = styles.color.blackBright;
+	styles.bgColor.bgGrey = styles.bgColor.bgBlackBright;
 
-    var $async = _schema.$async === true;
+	for (const [groupName, group] of Object.entries(styles)) {
+		for (const [styleName, style] of Object.entries(group)) {
+			styles[styleName] = {
+				open: `\u001B[${style[0]}m`,
+				close: `\u001B[${style[1]}m`
+			};
 
-    var sourceCode = validateGenerator({
-      isTop: true,
-      schema: _schema,
-      isRoot: isRoot,
-      baseId: baseId,
-      root: _root,
-      schemaPath: '',
-      errSchemaPath: '#',
-      errorPath: '""',
-      MissingRefError: errorClasses.MissingRef,
-      RULES: RULES,
-      validate: validateGenerator,
-      util: util,
-      resolve: resolve,
-      resolveRef: resolveRef,
-      usePattern: usePattern,
-      useDefault: useDefault,
-      useCustomRule: useCustomRule,
-      opts: opts,
-      formats: formats,
-      logger: self.logger,
-      self: self
-    });
+			group[styleName] = styles[styleName];
 
-    sourceCode = vars(refVal, refValCode) + vars(patterns, patternCode)
-                   + vars(defaults, defaultCode) + vars(customRules, customRuleCode)
-                   + sourceCode;
+			codes.set(style[0], style[1]);
+		}
 
-    if (opts.processCode) sourceCode = opts.processCode(sourceCode, _schema);
-    // console.log('\n\n\n *** \n', JSON.stringify(sourceCode));
-    var validate;
-    try {
-      var makeValidate = new Function(
-        'self',
-        'RULES',
-        'formats',
-        'root',
-        'refVal',
-        'defaults',
-        'customRules',
-        'equal',
-        'ucs2length',
-        'ValidationError',
-        'regExp',
-        sourceCode
-      );
+		Object.defineProperty(styles, groupName, {
+			value: group,
+			enumerable: false
+		});
+	}
 
-      validate = makeValidate(
-        self,
-        RULES,
-        formats,
-        root,
-        refVal,
-        defaults,
-        customRules,
-        equal,
-        ucs2length,
-        ValidationError,
-        opts.regExp
-      );
+	Object.defineProperty(styles, 'codes', {
+		value: codes,
+		enumerable: false
+	});
 
-      refVal[0] = validate;
-    } catch(e) {
-      self.logger.error('Error compiling schema, function code:', sourceCode);
-      throw e;
-    }
+	styles.color.close = '\u001B[39m';
+	styles.bgColor.close = '\u001B[49m';
 
-    validate.schema = _schema;
-    validate.errors = null;
-    validate.refs = refs;
-    validate.refVal = refVal;
-    validate.root = isRoot ? validate : _root;
-    if ($async) validate.$async = true;
-    if (opts.sourceCode === true) {
-      validate.source = {
-        code: sourceCode,
-        patterns: patterns,
-        defaults: defaults
-      };
-    }
+	setLazyProperty(styles.color, 'ansi', () => makeDynamicStyles(wrapAnsi16, 'ansi16', ansi2ansi, false));
+	setLazyProperty(styles.color, 'ansi256', () => makeDynamicStyles(wrapAnsi256, 'ansi256', ansi2ansi, false));
+	setLazyProperty(styles.color, 'ansi16m', () => makeDynamicStyles(wrapAnsi16m, 'rgb', rgb2rgb, false));
+	setLazyProperty(styles.bgColor, 'ansi', () => makeDynamicStyles(wrapAnsi16, 'ansi16', ansi2ansi, true));
+	setLazyProperty(styles.bgColor, 'ansi256', () => makeDynamicStyles(wrapAnsi256, 'ansi256', ansi2ansi, true));
+	setLazyProperty(styles.bgColor, 'ansi16m', () => makeDynamicStyles(wrapAnsi16m, 'rgb', rgb2rgb, true));
 
-    return validate;
-  }
-
-  function resolveRef(baseId, ref, isRoot) {
-    ref = resolve.url(baseId, ref);
-    var refIndex = refs[ref];
-    var _refVal, refCode;
-    if (refIndex !== undefined) {
-      _refVal = refVal[refIndex];
-      refCode = 'refVal[' + refIndex + ']';
-      return resolvedRef(_refVal, refCode);
-    }
-    if (!isRoot && root.refs) {
-      var rootRefId = root.refs[ref];
-      if (rootRefId !== undefined) {
-        _refVal = root.refVal[rootRefId];
-        refCode = addLocalRef(ref, _refVal);
-        return resolvedRef(_refVal, refCode);
-      }
-    }
-
-    refCode = addLocalRef(ref);
-    var v = resolve.call(self, localCompile, root, ref);
-    if (v === undefined) {
-      var localSchema = localRefs && localRefs[ref];
-      if (localSchema) {
-        v = resolve.inlineRef(localSchema, opts.inlineRefs)
-            ? localSchema
-            : compile.call(self, localSchema, root, localRefs, baseId);
-      }
-    }
-
-    if (v === undefined) {
-      removeLocalRef(ref);
-    } else {
-      replaceLocalRef(ref, v);
-      return resolvedRef(v, refCode);
-    }
-  }
-
-  function addLocalRef(ref, v) {
-    var refId = refVal.length;
-    refVal[refId] = v;
-    refs[ref] = refId;
-    return 'refVal' + refId;
-  }
-
-  function removeLocalRef(ref) {
-    delete refs[ref];
-  }
-
-  function replaceLocalRef(ref, v) {
-    var refId = refs[ref];
-    refVal[refId] = v;
-  }
-
-  function resolvedRef(refVal, code) {
-    return typeof refVal == 'object' || typeof refVal == 'boolean'
-            ? { code: code, schema: refVal, inline: true }
-            : { code: code, $async: refVal && !!refVal.$async };
-  }
-
-  function usePattern(regexStr) {
-    var index = patternsHash[regexStr];
-    if (index === undefined) {
-      index = patternsHash[regexStr] = patterns.length;
-      patterns[index] = regexStr;
-    }
-    return 'pattern' + index;
-  }
-
-  function useDefault(value) {
-    switch (typeof value) {
-      case 'boolean':
-      case 'number':
-        return '' + value;
-      case 'string':
-        return util.toQuotedString(value);
-      case 'object':
-        if (value === null) return 'null';
-        var valueStr = stableStringify(value);
-        var index = defaultsHash[valueStr];
-        if (index === undefined) {
-          index = defaultsHash[valueStr] = defaults.length;
-          defaults[index] = value;
-        }
-        return 'default' + index;
-    }
-  }
-
-  function useCustomRule(rule, schema, parentSchema, it) {
-    if (self._opts.validateSchema !== false) {
-      var deps = rule.definition.dependencies;
-      if (deps && !deps.every(function(keyword) {
-        return Object.prototype.hasOwnProperty.call(parentSchema, keyword);
-      }))
-        throw new Error('parent schema must have all required keywords: ' + deps.join(','));
-
-      var validateSchema = rule.definition.validateSchema;
-      if (validateSchema) {
-        var valid = validateSchema(schema);
-        if (!valid) {
-          var message = 'keyword schema is invalid: ' + self.errorsText(validateSchema.errors);
-          if (self._opts.validateSchema == 'log') self.logger.error(message);
-          else throw new Error(message);
-        }
-      }
-    }
-
-    var compile = rule.definition.compile
-      , inline = rule.definition.inline
-      , macro = rule.definition.macro;
-
-    var validate;
-    if (compile) {
-      validate = compile.call(self, schema, parentSchema, it);
-    } else if (macro) {
-      validate = macro.call(self, schema, parentSchema, it);
-      if (opts.validateSchema !== false) self.validateSchema(validate, true);
-    } else if (inline) {
-      validate = inline.call(self, it, rule.keyword, schema, parentSchema);
-    } else {
-      validate = rule.definition.validate;
-      if (!validate) return;
-    }
-
-    if (validate === undefined)
-      throw new Error('custom keyword "' + rule.keyword + '"failed to compile');
-
-    var index = customRules.length;
-    customRules[index] = validate;
-
-    return {
-      code: 'customRule' + index,
-      validate: validate
-    };
-  }
+	return styles;
 }
 
-
-/**
- * Checks if the schema is currently compiled
- * @this   Ajv
- * @param  {Object} schema schema to compile
- * @param  {Object} root root object
- * @param  {String} baseId base schema ID
- * @return {Object} object with properties "index" (compilation index) and "compiling" (boolean)
- */
-function checkCompiling(schema, root, baseId) {
-  /* jshint validthis: true */
-  var index = compIndex.call(this, schema, root, baseId);
-  if (index >= 0) return { index: index, compiling: true };
-  index = this._compilations.length;
-  this._compilations[index] = {
-    schema: schema,
-    root: root,
-    baseId: baseId
-  };
-  return { index: index, compiling: false };
-}
-
-
-/**
- * Removes the schema from the currently compiled list
- * @this   Ajv
- * @param  {Object} schema schema to compile
- * @param  {Object} root root object
- * @param  {String} baseId base schema ID
- */
-function endCompiling(schema, root, baseId) {
-  /* jshint validthis: true */
-  var i = compIndex.call(this, schema, root, baseId);
-  if (i >= 0) this._compilations.splice(i, 1);
-}
-
-
-/**
- * Index of schema compilation in the currently compiled list
- * @this   Ajv
- * @param  {Object} schema schema to compile
- * @param  {Object} root root object
- * @param  {String} baseId base schema ID
- * @return {Integer} compilation index
- */
-function compIndex(schema, root, baseId) {
-  /* jshint validthis: true */
-  for (var i=0; i<this._compilations.length; i++) {
-    var c = this._compilations[i];
-    if (c.schema == schema && c.root == root && c.baseId == baseId) return i;
-  }
-  return -1;
-}
-
-
-function defaultCode(i) {
-  return 'var default' + i + ' = defaults[' + i + '];';
-}
-
-
-function refValCode(i, refVal) {
-  return refVal[i] === undefined ? '' : 'var refVal' + i + ' = refVal[' + i + '];';
-}
-
-
-function customRuleCode(i) {
-  return 'var customRule' + i + ' = customRules[' + i + '];';
-}
-
-
-function vars(arr, statement) {
-  if (!arr.length) return '';
-  var code = '';
-  for (var i=0; i<arr.length; i++)
-    code += statement(i, arr);
-  return code;
-}
+// Make the export immutable
+Object.defineProperty(module, 'exports', {
+	enumerable: true,
+	get: assembleStyles
+});
